@@ -46,6 +46,7 @@ export default function Grinder({
   const [rate, setRate] = useState(0);
   const [found, setFound] = useState<Found | null>(null);
   const [reveal, setReveal] = useState(false);
+  const [decoy, setDecoy] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
   const [keySaved, setKeySaved] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -98,6 +99,7 @@ export default function Grinder({
         locked = Math.min(n, Math.floor(lockTicks.current / TICKS_PER_CHAR));
         if (locked >= n && lockTicks.current >= n * TICKS_PER_CHAR + HOLD_TICKS) {
           setFound(pending.current);
+          setDecoy("0x" + rnd(64));
           pending.current = null;
           setFrame(null);
           go("idle");
@@ -173,8 +175,8 @@ export default function Grinder({
     } catch {}
   }
 
-  function toggleReveal() {
-    setReveal((r) => !r);
+  function revealKey() {
+    setReveal(true);
     setKeySaved(true);
     setConfirmDiscard(false);
   }
@@ -216,14 +218,36 @@ export default function Grinder({
         </button>
 
         <div className="mt-12 rounded-2xl border border-rule bg-white p-5 text-left sm:p-6">
-          <div className="flex items-center justify-between">
-            <h2 className="font-medium">Private key</h2>
-            <button onClick={toggleReveal} className="text-sm text-muted underline underline-offset-4 hover:text-ink">
-              {reveal ? "Hide" : "Reveal"}
-            </button>
-          </div>
-          <div className="mt-3 break-all rounded-xl bg-paper p-4 font-mono text-sm">
-            {reveal ? found.privateKey : "•".repeat(66)}
+          <h2 className="font-medium">Private key</h2>
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={reveal ? "Private key" : "Private key hidden. Tap to reveal"}
+            onClick={() => !reveal && revealKey()}
+            onKeyDown={(e) => {
+              if (!reveal && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                revealKey();
+              }
+            }}
+            className={`relative mt-3 overflow-hidden rounded-xl bg-paper p-4 ${reveal ? "" : "cursor-pointer"}`}
+          >
+            <p
+              aria-hidden={!reveal}
+              className={`break-all font-mono text-sm transition-[filter] duration-500 ease-out ${reveal ? "blur-0" : "select-none blur-[7px]"}`}
+            >
+              {reveal ? found.privateKey : decoy}
+            </p>
+            <span
+              aria-hidden
+              className={`pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-sm font-medium transition-opacity duration-300 ${reveal ? "opacity-0" : "opacity-100"}`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              Tap to reveal
+            </span>
           </div>
           <p className="mt-3 text-sm text-red-600">
             Shown once and never stored. Import it into your wallet now. Anyone with this key controls the address.
