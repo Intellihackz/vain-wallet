@@ -1,26 +1,41 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: #fafafa;
+  --color-ink: #0a0a0a;
+  --color-muted: #6b6b6b;
+  --color-rule: #e6e6e6;
+  --font-sans: "Inter Tight Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+:root { color-scheme: light; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  letter-spacing: -0.011em;
+}
+
+::selection { background: var(--color-ink); color: var(--color-paper); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  height: 2.75rem; padding: 0 1.4rem; border-radius: 999px;
+  background: var(--color-ink); color: #fff; font-size: .9375rem; font-weight: 500;
+  border: 1px solid var(--color-ink);
+  transition: background .15s, color .15s, transform .1s;
+}
+.btn:hover { background: #2a2a2a; }
+.btn:active { transform: scale(.985); }
+.btn:disabled { opacity: .3; pointer-events: none; }
+.btn-light { background: #fff; color: var(--color-ink); border-color: var(--color-rule); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.btn-light:hover { background: #f3f3f3; }
+
+/* soft bloom behind the hero object */
+.bloom {
+  background:
+    radial-gradient(closest-side, #fff 0%, rgb(255 255 255 / 0) 100%),
+    radial-gradient(closest-side, rgb(0 0 0 / .05) 0%, rgb(0 0 0 / 0) 100%);
 }
