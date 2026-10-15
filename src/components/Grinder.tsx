@@ -3,12 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AddressView from "./AddressView";
 import {
-  MAX_PATTERN,
+  B58,
+  CHAIN_LABEL,
   formatDuration,
+  hardStartNote,
+  maxLen,
   median,
   normalize,
   odds,
   validate,
+  type Chain,
+  type Spec,
   type WorkerIn,
   type WorkerOut,
 } from "@/lib/vanity";
@@ -17,9 +22,16 @@ type Found = { address: string; privateKey: string; tries: number; seconds: numb
 type Phase = "idle" | "grinding" | "locking";
 type Frame = { pre: string; preGhost: string; mid: string; suf: string; sufGhost: string; solid: boolean };
 
-const ASSUMED_THREADS = 8; // for the estimate before the first run
+const ASSUMED_RATE = 40000 * 8; // keys/s, for the estimate before the first run
 const HEX = "0123456789abcdef";
-const rnd = (n: number) => Array.from({ length: n }, () => HEX[(Math.random() * 16) | 0]).join("");
+const rnd = (n: number, alphabet = HEX) =>
+  Array.from({ length: n }, () => alphabet[(Math.random() * alphabet.length) | 0]).join("");
+
+// Per chain: characters before the address body, body length, and the alphabet used for the animation.
+const CHAIN = {
+  evm: { lead: "0x", len: 40, alphabet: HEX, keyLen: 64 },
+  sol: { lead: "", len: 44, alphabet: B58, keyLen: 88 },
+} as const;
 const now = () => performance.now();
 const coreCount = () => Math.max(1, Math.min(16, (navigator.hardwareConcurrency || 4) - 1));
 
@@ -29,17 +41,30 @@ const TICK_MS = 70;
 const TICKS_PER_CHAR = 2; // lock-in speed
 const HOLD_TICKS = 7; // finished address stays on screen before the result view
 
-const PRESETS = ["dead", "cafe", "beef", "c0de", "face"];
+const PRESETS: Record<Chain, string[]> = {
+  evm: ["dead", "cafe", "beef", "c0de", "face"],
+  sol: ["Gm", "Ace", "Bad", "Cat", "Fab"],
+};
+
+function makeWorker(chain: Chain): Worker {
+  return chain === "sol"
+    ? new Worker(new URL("../workers/grind-sol.worker.ts", import.meta.url))
+    : new Worker(new URL("../workers/grind.worker.ts", import.meta.url));
+}
 
 export default function Grinder({
   initialPrefix = "",
   initialSuffix = "",
+  initialChain = "evm",
 }: {
   initialPrefix?: string;
   initialSuffix?: string;
+  initialChain?: Chain;
 }) {
-  const [prefix, setPrefix] = useState(initialPrefix.toLowerCase());
-  const [suffix, setSuffix] = useState(initialSuffix.toLowerCase());
+  const [chain, setChain] = useState<Chain>(initialChain);
+  const [ignoreCase, setIgnoreCase] = useState(false);
+  const [prefix, setPrefix] = useState(initialChain === "evm" ? initialPrefix.toLowerCase() : initialPrefix);
+  const [suffix, setSuffix] = useState(initialChain === "evm" ? initialSuffix.toLowerCase() : initialSuffix);
   const [phase, setPhase] = useState<Phase>("idle");
   const [frame, setFrame] = useState<Frame | null>(null);
   const [tries, setTries] = useState(0);
@@ -57,7 +82,7 @@ export default function Grinder({
   const phaseRef = useRef<Phase>("idle");
   const pending = useRef<Found | null>(null);
   const lockTicks = useRef(0);
-  const pat = useRef({ prefix: "", suffix: "" });
+  const pat = useRef({ prefix: "", suffix: "", chain: "evm" as Chain });
 
   const go = useCallback((next: Phase) => {
     phaseRef.current = next;
@@ -82,7 +107,8 @@ export default function Grinder({
   useEffect(() => {
     if (phase === "idle") return;
     const id = setInterval(() => {
-      const { prefix: pre, suffix: suf } = pat.current;
+      const { prefix: pre, suffix: suf, chain: ch } = pat.current;
+      const { lead, len, alphabet, keyLen } = CHAIN[ch];
       const n = pre.length + suf.length;
       const elapsed = now() - startedAt.current;
       setTries(triesRef.current);
@@ -99,7 +125,7 @@ export default function Grinder({
         locked = Math.min(n, Math.floor(lockTicks.current / TICKS_PER_CHAR));
         if (locked >= n && lockTicks.current >= n * TICKS_PER_CHAR + HOLD_TICKS) {
           setFound(pending.current);
-          setDecoy("0x" + rnd(64));
+          setDecoy(lead + rnd(keyLen, alphabet));
           pending.current = null;
           setFrame(null);
           go("idle");
@@ -112,22 +138,28 @@ export default function Grinder({
       const sk = Math.max(0, locked - pre.length);
       const real = pending.current?.address;
       const all = locked >= n && !!real;
+      // Once a match exists, lock in its real characters (matters when case is ignored).
+      const shownPre = real ? real.slice(lead.length, lead.length + pre.length) : pre;
+      const shownSuf = real ? real.slice(real.length - suf.length) : suf;
       setFrame({
-        pre: pre.slice(0, pk),
-        preGhost: rnd(pre.length - pk),
-        suf: suf.slice(suf.length - sk),
-        sufGhost: rnd(suf.length - sk),
-        mid: all ? real.slice(2 + pre.length, 42 - suf.length) : rnd(40 - n),
+        pre: shownPre.slice(0, pk),
+        preGhost: rnd(pre.length - pk, alphabet),
+        suf: sk ? shownSuf.slice(suf.length - sk) : "",
+        sufGhost: rnd(suf.length - sk, alphabet),
+        mid: all ? real.slice(lead.length + pre.length, real.length - suf.length) : rnd(len - n, alphabet),
         solid: all,
       });
     }, TICK_MS);
     return () => clearInterval(id);
   }, [phase, go]);
 
+  const spec: Spec = { chain, ignoreCase: chain === "sol" && ignoreCase };
+  const cfg = CHAIN[chain];
   const pattern = { prefix, suffix };
-  const p = normalize(pattern);
-  const invalid = validate(pattern);
+  const p = normalize(spec, pattern);
+  const invalid = validate(spec, pattern);
   const error = prefix || suffix ? invalid : null;
+  const hint = invalid ? null : hardStartNote(spec, pattern);
   const busy = phase !== "idle";
 
   function start() {
@@ -140,12 +172,12 @@ export default function Grinder({
     setFrame(null);
     triesRef.current = 0;
     pending.current = null;
-    pat.current = p;
+    pat.current = { ...p, chain };
     startedAt.current = now();
     go("grinding");
     const threads = coreCount();
     for (let i = 0; i < threads; i++) {
-      const w = new Worker(new URL("../workers/grind.worker.ts", import.meta.url));
+      const w = makeWorker(chain);
       w.onmessage = (e: MessageEvent<WorkerOut>) => {
         triesRef.current += e.data.tries;
         if (e.data.type === "found" && !pending.current) {
@@ -158,7 +190,7 @@ export default function Grinder({
           killWorkers();
         }
       };
-      w.postMessage({ type: "start", prefix: p.prefix, suffix: p.suffix } satisfies WorkerIn);
+      w.postMessage({ type: "start", prefix: p.prefix, suffix: p.suffix, ignoreCase: spec.ignoreCase } satisfies WorkerIn);
       workers.current.push(w);
     }
   }
@@ -189,17 +221,20 @@ export default function Grinder({
     setTries(0);
   }
 
-  const speed = rate || 40000 * ASSUMED_THREADS;
-  const eta = invalid ? "-" : formatDuration(median(pattern) / speed);
-  const chance = busy && !invalid ? odds(pattern, tries) : 0;
+  const speed = rate || ASSUMED_RATE;
+  const eta = invalid ? "-" : formatDuration(median(spec, pattern) / speed);
+  const chance = busy && !invalid ? odds(spec, pattern, tries) : 0;
 
   if (found) {
-    const body = found.address.slice(2);
+    const a = found.address;
+    const shownPre = a.slice(cfg.lead.length, cfg.lead.length + p.prefix.length);
+    const shownSuf = a.slice(a.length - p.suffix.length);
+    const body = a.slice(cfg.lead.length + p.prefix.length, a.length - p.suffix.length);
     return (
       <div className="mx-auto max-w-2xl pb-4 text-center">
         <p className="inline-flex items-center gap-2 rounded-full border border-rule bg-white px-3 py-1 text-sm text-muted">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          {found.seconds < 1 ? "Found instantly" : `Found in ${formatDuration(found.seconds)}`}
+          {CHAIN_LABEL[chain]} · {found.seconds < 1 ? "Found instantly" : `Found in ${formatDuration(found.seconds)}`}
         </p>
         <h1 className="mt-5 text-[clamp(36px,6vw,60px)] font-medium leading-none tracking-[-0.05em]">There she is.</h1>
 
@@ -207,9 +242,10 @@ export default function Grinder({
           <div className="bloom pointer-events-none absolute left-1/2 top-1/2 -z-10 h-72 w-[min(900px,130%)] -translate-x-1/2 -translate-y-1/2" />
           <AddressView
             className="relative text-[clamp(14px,3.4vw,30px)]"
-            pre={p.prefix}
-            mid={body.slice(p.prefix.length, body.length - p.suffix.length)}
-            suf={p.suffix}
+            lead={cfg.lead}
+            pre={shownPre}
+            mid={body}
+            suf={shownSuf}
             solid
           />
         </div>
@@ -250,7 +286,9 @@ export default function Grinder({
             </span>
           </div>
           <p className="mt-3 text-sm text-red-600">
-            Shown once and never stored. Import it into your wallet now. Anyone with this key controls the address.
+            {chain === "sol"
+              ? "Shown once and never stored. Import it into Phantom or Solflare with Import Private Key. Anyone with this key controls the address."
+              : "Shown once and never stored. Import it into your wallet now. Anyone with this key controls the address."}
           </p>
           <button onClick={() => copy("key", found.privateKey)} className="btn mt-4 w-full">
             {copied === "key" ? "Copied" : "Copy private key"}
@@ -278,7 +316,7 @@ export default function Grinder({
     );
   }
 
-  const idleMid = "·".repeat(Math.max(0, 40 - p.prefix.length - p.suffix.length));
+  const idleMid = "·".repeat(Math.max(0, cfg.len - p.prefix.length - p.suffix.length));
 
   return (
     <div className="mx-auto max-w-3xl pb-4 text-center">
@@ -287,11 +325,29 @@ export default function Grinder({
         {busy ? "Searching for your address…" : "Choose a pattern. Everything runs in this tab."}
       </p>
 
+      <div role="radiogroup" aria-label="Chain" className="mx-auto mt-6 inline-flex rounded-full border border-rule bg-white p-1">
+        {(["evm", "sol"] as const).map((c) => (
+          <button
+            key={c}
+            role="radio"
+            aria-checked={chain === c}
+            disabled={busy}
+            onClick={() => setChain(c)}
+            className={`rounded-full px-5 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed ${
+              chain === c ? "bg-ink text-white" : "text-muted hover:text-ink"
+            } ${busy && chain !== c ? "opacity-40" : ""}`}
+          >
+            {CHAIN_LABEL[c]}
+          </button>
+        ))}
+      </div>
+
       <div className="relative mt-12">
         <div className="bloom pointer-events-none absolute left-1/2 top-1/2 -z-10 h-72 w-[min(900px,130%)] -translate-x-1/2 -translate-y-1/2" />
         {frame ? (
           <AddressView
             className="relative text-[clamp(14px,3.4vw,30px)]"
+            lead={cfg.lead}
             pre={frame.pre}
             preGhost={frame.preGhost}
             mid={frame.mid}
@@ -300,18 +356,18 @@ export default function Grinder({
             solid={frame.solid}
           />
         ) : (
-          <AddressView className="relative text-[clamp(14px,3.4vw,30px)]" pre={p.prefix} mid={idleMid} suf={p.suffix} />
+          <AddressView className="relative text-[clamp(14px,3.4vw,30px)]" lead={cfg.lead} pre={p.prefix} mid={idleMid} suf={p.suffix} />
         )}
       </div>
 
       <div className="mx-auto mt-14 max-w-xl border-t border-rule pt-10 text-left">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Starts with" lead="0x" value={prefix} onChange={setPrefix} disabled={busy} placeholder="dead" />
-          <Field label="Ends with" lead="…" value={suffix} onChange={setSuffix} disabled={busy} placeholder="beef" />
+          <Field label="Starts with" lead={cfg.lead} value={prefix} onChange={setPrefix} disabled={busy} placeholder={chain === "sol" ? "Gm" : "dead"} />
+          <Field label="Ends with" lead="…" value={suffix} onChange={setSuffix} disabled={busy} placeholder={chain === "sol" ? "pump" : "beef"} />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
           <span className="text-muted">Try</span>
-          {PRESETS.map((x) => (
+          {PRESETS[chain].map((x) => (
             <button
               key={x}
               disabled={busy}
@@ -323,6 +379,20 @@ export default function Grinder({
           ))}
           <span className="ml-auto h-5 text-red-600">{error}</span>
         </div>
+
+        {chain === "sol" && (
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={ignoreCase}
+              disabled={busy}
+              onChange={(e) => setIgnoreCase(e.target.checked)}
+              className="h-4 w-4 accent-ink"
+            />
+            Ignore upper and lower case (much faster)
+          </label>
+        )}
+        {hint && <p className="mt-3 text-sm text-amber-700">{hint}</p>}
 
         <dl className="mt-8 grid grid-cols-2 gap-y-3 text-sm sm:grid-cols-4">
           <Stat k="Typical wait" v={eta} />
@@ -344,7 +414,7 @@ export default function Grinder({
             <button onClick={start} disabled={!!invalid} className="btn w-full">Start grinding</button>
           )}
         </div>
-        <p className="mt-4 text-center text-xs text-muted">Up to {MAX_PATTERN} characters. Nothing is uploaded.</p>
+        <p className="mt-4 text-center text-xs text-muted">Up to {maxLen(chain)} characters. Nothing is uploaded.</p>
       </div>
     </div>
   );
@@ -361,7 +431,7 @@ function Stat({ k, v }: { k: string; v: string }) {
 
 function Field(props: {
   label: string;
-  lead: string;
+  lead?: string;
   value: string;
   onChange: (v: string) => void;
   disabled: boolean;
@@ -371,7 +441,7 @@ function Field(props: {
     <label className="block">
       <span className="mb-1.5 block text-sm text-muted">{props.label}</span>
       <span className="flex items-center gap-2 rounded-full border border-rule bg-white px-5 py-3 font-mono text-lg focus-within:border-ink">
-        <span className="text-ink/30">{props.lead}</span>
+        {props.lead && <span className="text-ink/30">{props.lead}</span>}
         <input
           value={props.value}
           onChange={(e) => props.onChange(e.target.value)}

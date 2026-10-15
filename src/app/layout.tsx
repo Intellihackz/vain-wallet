@@ -5,7 +5,7 @@ import Header from "@/components/Header";
 import "./globals.css";
 
 const title = "Vain Wallet · A wallet address with your name on it";
-const description = "Choose how your EVM wallet address starts and ends. Ground in your browser, never uploaded.";
+const description = "Choose how your EVM or Solana wallet address starts and ends. Ground in your browser, never uploaded.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://getvain.lol"),

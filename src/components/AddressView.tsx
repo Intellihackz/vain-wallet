@@ -5,6 +5,7 @@ export default function AddressView({
   mid,
   suf = "",
   sufGhost = "",
+  lead = "0x",
   solid = false,
   className = "",
   ...rest
@@ -14,6 +15,7 @@ export default function AddressView({
   mid: string;
   suf?: string;
   sufGhost?: string;
+  lead?: string;
   solid?: boolean;
   className?: string;
   "aria-hidden"?: boolean;
@@ -21,7 +23,7 @@ export default function AddressView({
   const tag = "rounded-[0.18em] bg-ink px-[0.12em] text-white";
   return (
     <div {...rest} className={`break-all text-center font-mono leading-[1.5] ${className}`}>
-      <span className="text-ink/25">0x</span>
+      {lead && <span className="text-ink/25">{lead}</span>}
       {pre && <span className={tag}>{pre}</span>}
       {preGhost && <span className="text-ink/35">{preGhost}</span>}
       <span className={solid ? "text-ink" : "text-ink/35"}>{mid}</span>
